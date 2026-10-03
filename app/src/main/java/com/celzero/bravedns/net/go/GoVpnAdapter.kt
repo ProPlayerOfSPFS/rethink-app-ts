@@ -919,12 +919,12 @@ class GoVpnAdapter : KoinComponent {
             Intra.addDNSProxy(tunnel, TailscaleManager.ID_TS_DNS, TailscaleManager.TS_DNS_ADDR)
             Logger.i(
                 LOG_TAG_VPN,
-                "$TAG tailscale proxy added ($url), success? ${res != null}, dns? ${TailscaleManager.TS_DNS_ADDR}"
+                "$TAG tailscale proxy added (${redactCreds(url)}), success? ${res != null}, dns? ${TailscaleManager.TS_DNS_ADDR}"
             )
             logEvent(
                 Severity.LOW,
                 "set tailscale proxy",
-                "tailscale socks5 proxy added with url: $url"
+                "tailscale socks5 proxy added with url: ${redactCreds(url)}"
             )
             ts.applyPendingPrefs()
         } catch (e: Exception) {
@@ -936,6 +936,11 @@ class GoVpnAdapter : KoinComponent {
             )
         }
     }
+
+    // strip "user:pass@" so the per-start SOCKS5 secret never lands in
+    // logcat, the in-app event log, or bug reports
+    private fun redactCreds(url: String): String =
+        url.replace(Regex("://[^@/]*@"), "://***@")
 
     suspend fun removeTailscaleProxy() {
         if (!tunnel.isConnected) return

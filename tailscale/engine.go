@@ -227,6 +227,11 @@ func NewEngine(stateDir string, cb Callback) (*Engine, error) {
 	// and DNS relay, plus other apps' local servers) to any tailnet peer the
 	// ACL lets reach this node. This node only originates connections.
 	ns.ProcessLocalIPs = false
+	// ...but replies to connections this node originated (and nothing else)
+	// must still reach netstack: admit only packets matching an existing
+	// gVisor endpoint. Without this, every outbound tailnet dial times out
+	// ("Host unreachable"). Same pairing tsnet uses in TUN mode.
+	ns.CheckLocalTransportEndpoints = true
 	ns.ProcessSubnets = true
 	sys.Set(ns)
 

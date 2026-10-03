@@ -18,6 +18,8 @@ package tailscale
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,6 +120,12 @@ type Engine struct {
 
 	started bool
 	stopped bool
+
+	// per-start random SOCKS5 credentials; Android loopback is shared by
+	// every app in every profile, so an open listener would let any app
+	// reach the tailnet, bypassing Rethink's per-app assignment.
+	socksUser string
+	socksPass string
 }
 
 // NewEngine constructs an Engine. stateDir persists node identity across app
@@ -213,7 +221,12 @@ func NewEngine(stateDir string, cb Callback) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("netstack: %w", err)
 	}
-	ns.ProcessLocalIPs = true
+	// SECURITY: must stay false. When true, netstack rewrites inbound tailnet
+	// TCP/UDP aimed at this node's own Tailscale IP to 127.0.0.1:<port>,
+	// exposing every loopback listener on the device (this engine's SOCKS5
+	// and DNS relay, plus other apps' local servers) to any tailnet peer the
+	// ACL lets reach this node. This node only originates connections.
+	ns.ProcessLocalIPs = false
 	ns.ProcessSubnets = true
 	sys.Set(ns)
 
@@ -336,9 +349,19 @@ func (e *Engine) Start(hostname, controlURL, authKey string) error {
 	e.socksLn = ln
 	e.cancel = cancel
 
+	user, pass, err := randomCreds()
+	if err != nil {
+		ln.Close()
+		cancel()
+		return fmt.Errorf("socks5 creds: %w", err)
+	}
+	e.socksUser, e.socksPass = user, pass
+
 	socksSrv := &socks5.Server{
-		Logf:   logger.WithPrefix(log.Printf, "ts-socks5: "),
-		Dialer: userDialWithLog,
+		Logf:     logger.WithPrefix(log.Printf, "ts-socks5: "),
+		Dialer:   userDialWithLog,
+		Username: user,
+		Password: pass,
 	}
 	go func() {
 		if err := socksSrv.Serve(ln); err != nil {
@@ -691,7 +714,24 @@ func (e *Engine) StatusJSON() string {
 
 // Socks5ProxyURL is the URL Rethink adds to its proxy chain to reach the
 // tailnet.
-func (e *Engine) Socks5ProxyURL() string { return "socks5://" + Socks5Addr }
+func (e *Engine) Socks5ProxyURL() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.socksUser == "" {
+		return "" // not started: never hand out an unauthenticated URL
+	}
+	return "socks5://" + e.socksUser + ":" + e.socksPass + "@" + Socks5Addr
+}
+
+// randomCreds returns hex-only (URL-safe, no escaping needed) credentials.
+// socks5 RFC 1929 caps each field at 255 bytes; 16 random bytes is plenty.
+func randomCreds() (string, string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", err
+	}
+	return hex.EncodeToString(b[:16]), hex.EncodeToString(b[16:]), nil
+}
 
 // startDNSRelay serves plain DNS53 on DNSAddr, answering via the engine's
 // DNS manager (the same path netstack uses for TUN-intercepted queries).

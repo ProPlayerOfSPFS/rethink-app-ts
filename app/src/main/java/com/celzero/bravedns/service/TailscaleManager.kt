@@ -400,7 +400,9 @@ class TailscaleManager private constructor(private val context: Context) : KoinC
      * engine is not up.
      */
     fun proxyUrl(): String {
-        return if (isEngineUp) "socks5://$TS_SOCKS5_ADDR" else ""
+        // authenticated URL from the engine (random creds per start); empty when
+        // the engine is down or not yet serving
+        return if (isEngineUp) engine?.socks5ProxyURL() ?: "" else ""
     }
 
     private suspend fun startEngineInternal() {
